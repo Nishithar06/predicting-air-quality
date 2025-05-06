@@ -1,0 +1,125 @@
+import pandas as pd
+import numpy as np
+import glob, os
+import matplotlib.pyplot as plt
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+# ─── 1. CONFIG ──────────────────────────────────────────────────────────
+DATA_FOLDER = "D:\datasets airquality index"   # ← your folder path
+TARGET_COLUMN = 'AQI'                            # ← sample has an 'AQI' column
+
+# ─── 2. LOAD & CLEAN MULTIPLE FILES ────────────────────────────────────
+all_files = glob.glob(os.path.join(DATA_FOLDER, "*.csv"))
+df_list = []
+
+for fp in all_files:
+    df = pd.read_csv(fp, sep=';', low_memory=False)
+    
+    # Strip whitespaces from column names
+    df.columns = df.columns.str.strip()
+    
+    # Drop unnamed extras if they exist
+    df = df.loc[:, ~df.columns.str.contains('^Unnamed')]
+    
+    # Replace commas with periods and convert columns to numeric
+    for col in df.columns[df.dtypes == object]:
+        df[col] = df[col].str.replace(',', '.', regex=False)
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Combine Date and Time into a single Datetime column if both exist
+    if {'Date','Time'}.issubset(df.columns):
+        df['Datetime'] = pd.to_datetime(
+            df['Date'].astype(str) + ' ' + df['Time'].astype(str),
+            format="%d/%m/%Y %H.%M.%S",
+            errors='coerce'
+        )
+        df.drop(['Date','Time'], axis=1, inplace=True)
+    elif 'Date' in df.columns:
+        df['Datetime'] = pd.to_datetime(
+            df['Date'].astype(str),
+            dayfirst=True,
+            errors='coerce'
+        )
+        df.drop(['Date'], axis=1, inplace=True)
+
+    # Drop rows with NaN values after parsing/numeric conversion
+    df.dropna(inplace=True)
+    
+    # Record the source file (optional)
+    df['source_file'] = os.path.basename(fp)
+    
+    df_list.append(df)
+
+# Concatenate all the dataframes into one
+full_df = pd.concat(df_list, ignore_index=True)
+
+# Debug: Print the columns to inspect their exact names
+print("Columns in full_df:", full_df.columns.tolist())
+
+# ─── 3. FEATURES & TARGET ────────────────────────────────────────────────
+# Manually set the correct column names after inspection
+TARGET_COLUMN = 'AQI'  # Ensure this is correct based on your dataset
+DATETIME_COL = 'Datetime'  # This is the column with combined Date and Time
+SOURCE_COL = 'source_file'  # Adjust if your source column is named differently
+
+# Verify that the columns exist
+if TARGET_COLUMN not in full_df.columns:
+    print(f"Warning: {TARGET_COLUMN} column not found!")
+if DATETIME_COL not in full_df.columns:
+    print(f"Warning: {DATETIME_COL} column not found!")
+if SOURCE_COL not in full_df.columns:
+    print(f"Warning: {SOURCE_COL} column not found!")
+
+# Remove the 'Datetime' and 'source_file' columns from features
+X = full_df.drop([TARGET_COLUMN, DATETIME_COL, SOURCE_COL], axis=1)
+y = full_df[TARGET_COLUMN]
+
+# ─── 4. SPLIT, SCALE, TRAIN ─────────────────────────────────────────────
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+# Standardize the features
+scaler = StandardScaler()
+X_train_s = scaler.fit_transform(X_train)
+X_test_s  = scaler.transform(X_test)
+
+# Train a Random Forest model
+model = RandomForestRegressor(random_state=42)
+model.fit(X_train_s, y_train)
+
+# ─── 5. PREDICT & EVALUATE ───────────────────────────────────────────────
+y_pred = model.predict(X_test_s)
+
+# Evaluate the model
+print("MAE :", mean_absolute_error(y_test, y_pred))
+print("RMSE:", mean_squared_error(y_test, y_pred, squared=False))
+print("R²  :", r2_score(y_test, y_pred))
+
+# ─── 6. VISUALIZE WITH MATPLOTLIB ────────────────────────────────────────
+
+# Actual vs Predicted plot
+plt.figure(figsize=(10,6))
+plt.plot(y_test.values, label='Actual', alpha=0.7)
+plt.plot(y_pred,          label='Predicted', linestyle='--', alpha=0.7)
+plt.title(f'Actual vs Predicted {TARGET_COLUMN}')
+plt.xlabel('Sample index')
+plt.ylabel(TARGET_COLUMN)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# Feature importance plot
+importances = model.feature_importances_
+features    = X.columns
+
+plt.figure(figsize=(10,6))
+plt.barh(features, importances)
+plt.title('Feature Importances')
+plt.xlabel('Importance')
+plt.tight_layout()
+plt.show()
